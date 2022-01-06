@@ -9,7 +9,7 @@ case class RunStats(winNum: Int, loseNum: Int, leastBalance: BigDecimal)
 case class StateModel (startAmount: BigDecimal, odds: Odds, iterations: Int, runStats: Option[RunStats]=None)
 
 
-//run 10000 0.9 0.01 -0.05 0.1 1000
+//run 10000 0.9 0.01 0.05 0.1 1000
 object Main extends IOApp {
   val argsReader: Reader[List[String], Option[StateModel]] =
     Reader(inputs =>
@@ -60,7 +60,15 @@ object Main extends IOApp {
     resIO.getAndUpdate((x: List[StateModel]) => x :+ cur)
 
   def printFinalState(cur: StateModel): IO[Unit] = {
-    IO(cur.runStats.foreach(stat => println(s"final output is ${cur.startAmount} Win Nums: ${stat.winNum} Lose Nums: ${stat.loseNum} Least Amount ${stat.leastBalance}" ))) 
+    IO(cur.runStats.foreach(stat => 
+      println(s"final output is ${cur.startAmount} Win Nums: ${stat.winNum} Lose Nums: ${stat.loseNum} Least Amount ${stat.leastBalance}" 
+      ))) 
+  }
+  def printSummary(resIO: Ref[IO, List[StateModel]] ):IO[Unit]={
+    resIO.get.map(lst => {
+      val sm = lst.map(_.startAmount).sum
+      println(s"Average: ${sm/lst.size}")
+    })
   }
 
   def simulate(cur: StateModel, resIO: Ref[IO, List[StateModel]] ): IO[Unit] = {
@@ -81,8 +89,8 @@ object Main extends IOApp {
     {
       Ref.of[IO, List[StateModel]](List[StateModel]()).flatMap(resIO => {
         argsReader.run(args) match {
-          case Some(req) => //a=>f[b] simulate(c,r) => IO[U]
-            (1 until 100).toList.parTraverseN(10)(_=>simulate(req, resIO)).as(ExitCode.Success)
+          case Some(req) =>
+            (1 until 100).toList.parTraverseN(10)(_=>simulate(req, resIO)) >> printSummary(resIO).as(ExitCode.Success)
           case None =>
             IO(System.err.println("Args should be of form: StartAmount winOdds winIncrease loseDecrease percPerBet iterations")).as(ExitCode.Error)
         }
