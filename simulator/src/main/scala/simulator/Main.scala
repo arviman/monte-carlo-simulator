@@ -1,23 +1,24 @@
 package simulator
 
-import cats.effect.{ExitCode, IO, IOApp}
+import cats.effect.{ExitCode, IO, IOApp, Ref}
 import cats.data.Reader
+import cats.effect.implicits.concurrentParTraverseOps
 
-case class Odds(val winOdds: Double, val winIncrease: Double, val loseDecrease: Double)
-case class RunStats(val winNum: Int, val loseNum: Int, val leastBalance: BigDecimal)
-case class StateModel (val startAmount: BigDecimal, odds: Odds , iterations: Int, runStats: Option[RunStats]=None)
+case class Odds(winOdds: Double, winIncrease: Double, loseDecrease: Double, percPos: Double)
+case class RunStats(winNum: Int, loseNum: Int, leastBalance: BigDecimal)
+case class StateModel (startAmount: BigDecimal, odds: Odds, iterations: Int, runStats: Option[RunStats]=None)
 
 
-//run 10000 0.9 0.01 -0.05 1000
+//run 10000 0.9 0.01 -0.05 0.1 1000
 object Main extends IOApp {
-  val argsReader: Reader[List[String], Option[StateModel]] = 
+  val argsReader: Reader[List[String], Option[StateModel]] =
     Reader(inputs =>
-      if(inputs.length == 5)
+      if(inputs.length == 6)
         Some(
           StateModel( 
-            inputs(0).toDouble,
-            Odds (inputs(1).toDouble,(inputs(2)).toDouble,(inputs(3)).toDouble),
-            inputs(4).toInt
+            inputs.head.toDouble,
+            Odds (inputs(1).toDouble,(inputs(2)).toDouble,(inputs(3)).toDouble, inputs(4).toDouble),
+            inputs(5).toInt
             )
         )
       else None
@@ -37,7 +38,7 @@ object Main extends IOApp {
       //(println(s"${res} ${winOdds}"))
 
       val winRes = res < winOdds
-      val nextAmount = if (winRes) cur.startAmount * (1 + cur.odds.winIncrease) else cur.startAmount * (1 - cur.odds.loseDecrease)
+      val nextAmount = cur.startAmount + (cur.startAmount * cur.odds.percPos * (if (winRes)  (cur.odds.winIncrease) else (-cur.odds.loseDecrease)) )
 
      val newStateModel = StateModel(
           nextAmount, 
@@ -55,25 +56,38 @@ object Main extends IOApp {
     }
 
   }
+  def storeFinalState(cur: StateModel, resIO: Ref[IO, List[StateModel]]): IO[List[StateModel]] =
+    resIO.getAndUpdate((x: List[StateModel]) => x :+ cur)
+
   def printFinalState(cur: StateModel): IO[Unit] = {
     IO(cur.runStats.foreach(stat => println(s"final output is ${cur.startAmount} Win Nums: ${stat.winNum} Lose Nums: ${stat.loseNum} Least Amount ${stat.leastBalance}" ))) 
   }
 
-  def simulate(cur: StateModel): IO[Unit] = {
+  def simulate(cur: StateModel, resIO: Ref[IO, List[StateModel]] ): IO[Unit] = {
     
     calculate(cur) match {
       case Some(r) =>
-        simulate(r)        
+        simulate(r, resIO)
       case None =>
-        printFinalState(cur)
+        for {
+          _ <- storeFinalState(cur, resIO)
+          _ <- printFinalState(cur)
+        }
+        yield ()
     }
   }
 
   override def run(args: List[String]): IO[ExitCode] =
-   argsReader.run(args) match {
-      case Some(req) =>
-        simulate(req).as(ExitCode.Success)
-      case None =>
-        IO(System.err.println("Args should be of form: StartAmount winOdds winIncrease loseDecrease iterations")).as(ExitCode(2))
+    {
+      Ref.of[IO, List[StateModel]](List[StateModel]()).flatMap(resIO => {
+        argsReader.run(args) match {
+          case Some(req) => //a=>f[b] simulate(c,r) => IO[U]
+            (1 until 100).toList.parTraverseN(10)(_=>simulate(req, resIO)).as(ExitCode.Success)
+          case None =>
+            IO(System.err.println("Args should be of form: StartAmount winOdds winIncrease loseDecrease percPerBet iterations")).as(ExitCode.Error)
+        }
+      })
     }
+
+   
 }
